@@ -29,7 +29,7 @@ def main(genomeref_file, annotation_file, mirbase_file, output_dir, num_cores, f
             raise IOError("Fatal error - can't find input file {}".format(fname))
     
     # Load environment modules
-    env_modules = ['bioinfo-tools','cutadapt','FastQC','bowtie','samtools', 'htseq']
+    env_modules = ['bioinfo-tools','cutadapt','FastQC/0.11.2','bowtie','samtools', 'htseq']
     load_modules(env_modules)
     
     # Find the number of available cores
@@ -357,9 +357,9 @@ def miRBase_align(fq_input, run_directory, num_cores):
     miRBase_hairpin = miRBase_dir + 'hairpin'
     miRBase_mature = miRBase_dir + 'mature'
     hairpin_output_fn = "{}_hairpin_miRNA_aligned.bam".format(os.path.splitext(os.path.basename(fq_input))[0])
-    hairpin_output = os.path.join(run_directory.output_dir, hairpin_output_fn)
+    hairpin_output = os.path.join(run_directory.tmp_dirs, hairpin_output_fn)
     mature_output_fn = "{}_mature_miRNA_aligned.bam".format(os.path.splitext(os.path.basename(fq_input))[0])
-    mature_output = os.path.join(run_directory.output_dir, mature_output_fn)
+    mature_output = os.path.join(run_directory.tmp_dirs, mature_output_fn)
     
     # Alignment commands
     h_cmd = shlex.split("bowtie -p {num_cores} -t -n 0 -l 15 -e 99999 -k 200 " \
@@ -464,7 +464,7 @@ def samtools_count_alignments (input_bam, run_directory):
         samtools_p = subprocess.Popen(samtools_cmd, stdout=subprocess.PIPE)
         sort_p = subprocess.Popen(sort_cmd, stdin=samtools_p.stdout, stdout=subprocess.PIPE)
         samtools_p.stdout.close()
-        counts_output = sort_p.read()
+        counts_output = sort_p.communicate()[0]
     except subprocess.CalledProcessError:
         return False
     
