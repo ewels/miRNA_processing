@@ -15,6 +15,8 @@ import sys
 import subprocess
 import tempfile
 
+import count_biotypes
+
 from collections import defaultdict
 from matplotlib import pyplot
 
@@ -55,8 +57,10 @@ def main(genomeref_file, annotation_file, mirbase_file, output_dir, num_cores, f
     
     # annotate with htseq-count
     if annotation_file and os.path.isfile(annotation_file):
-        # Process with HTSeq
+        # Get top hits with HTSeq-counts on command line
         annotated_bam, htseq_counts_csv = htseq_counts(aligned_bam, run_directory, annotation_file)
+        # Make pie chart of biotype alignments
+        (counts, piechart) = htseq_biotypes(annotated_bam, run_directory, annotation_file)
     else:
         print("Error - annotation file not found, cannot calculate feature enrichment. " \
               "Use -g to specify a GTF/GFF file.\nSkipping feature enrichment step..\n\n",
@@ -344,6 +348,28 @@ def htseq_counts(aligned_bam, run_directory, annotation_file):
     
     # Return with filenames
     return (annotated_bam, htseq_counts)
+
+
+def htseq_biotypes (bam_input, run_directory, annotation_file):
+    """
+    Use count_biotypes.py to count read overlaps with different biotypes.
+    """
+    # Set up filenames
+    bam_input = os.path.realpath(bam_input)
+    annotation_file = os.path.realpath(annotation_file)
+    counts_fn = "{}_counts.txt".format(os.path.splitext(os.path.basename(fname))[0])
+    counts_path = os.path.join(run_directory.output_dir, counts_fn)
+    
+    # Get the counts
+    counts = count_biotypes.count_biotypes(bam_input, annotation_file)
+    
+    # Save counts to file
+    try:
+        with open(counts_path, 'w') as fh:
+            print(counts, file=fh);
+    except IOError as e:
+        raise IOError(e)
+    
     
 def miRBase_align(fq_input, run_directory, num_cores):
     """
