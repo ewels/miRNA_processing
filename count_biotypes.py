@@ -21,7 +21,7 @@ from matplotlib import pyplot
 
 
 
-def main(annotation_file, input_bam_list):
+def main(annotation_file, input_bam_list, counts_file, feature_type, quiet):
     """
     Count the biotypes
     """
@@ -38,21 +38,26 @@ def main(annotation_file, input_bam_list):
     
     # Process files
     for fname in input_bam_list:
-        counts = count_biotypes(fname, annotation_file)
-        # Save to file
-        counts_fn = "{}_counts.txt".format(os.path.splitext(os.path.basename(fname))[0])
-        try:
-            with open(counts_fn, 'w') as fh:
-                print(counts_fn, file=fh);
-        except IOError as e:
-            raise IOError(e)
-    
+        if not quiet:
+            print("Processing {}".format(fname), file=sys.stderr)
+        counts = count_biotypes(fname, annotation_file, feature_type, quiet)
+        if counts_file:
+            # Save to file
+            try:
+                with open(counts_file, 'w') as fh:
+                    print(counts, file=fh);
+            except IOError as e:
+                raise IOError(e)
+        else:
+            # Print to STDOUT
+            print(counts, file=sys.stdout)
+            
     # Done!
     pass
 
 
 
-def count_biotypes (aligned_bam, annotation_file):
+def count_biotypes (aligned_bam, annotation_file, count_feature_type='exon', quiet=0):
     """
     Custom function that uses HTSeq core to calculate percentage alignments
     across different annotation gene biotypes.
@@ -67,28 +72,71 @@ def count_biotypes (aligned_bam, annotation_file):
     gtffile = HTSeq.GFF_Reader( annotation_file )
             
     # Go through annotation
-    biotype_feature_type = 'transcript'
+    # Help from http://www-huber.embl.de/users/anders/HTSeq/doc/tour.html#tour
+    if not quiet:
+        print("\nParsing annotation file {}".format(annotation_file), file=sys.stderr)
+        print("Each dot is 100000 lines: ", end='', file=sys.stderr)
+    biotype_label = 'biotype'
     selected_features = HTSeq.GenomicArrayOfSets( "auto", stranded=False )
     ignored_features = 0
+    used_features = 0
     biotype_counts = {}
-    feature_types = {}
+    no_overlap_reads = 0
+    feature_type_counts = defaultdict(int)
+    feature_type_biotype_counts = defaultdict(lambda: defaultdict(int))
+    i = 0
     for feature in gtffile:
+        i += 1
+        if i % 100000 == 0 and not quiet:
+            print(".", end='', file=sys.stderr)
         # Collect features and initialise biotype count objects
-        if feature.type == biotype_feature_type:
-            if feature.attr['biotype'] is None:
-                ignored_features += 1
+        if feature.type == count_feature_type:
+            # See if we have another annotation that sounds like biotype
+            # eg. Human ensembl calls it gene_biotype
+            if biotype_label not in feature.attr:
+                for attr in feature.attr.iterkeys():
+                    if 'biotype' in attr:
+                        if not quiet:
+                            print("\nChanging biotype label from {} to {}".format(biotype_label, attr), file=sys.stderr)
+                        biotype_label = attr
+            
+            # Initiate count object and add feature to selected_features set  
+            if biotype_label in feature.attr:
+                used_features += 1
+                selected_features[ feature.iv ] += feature.attr[biotype_label]
+                biotype_counts[ feature.attr[biotype_label] ] = 0
             else:
-                selected_features[ feature.iv ] += feature.attr['biotype']
-                biotype_counts[ feature.attr['biotype'] ] = 0
+                ignored_features += 1
                 
         # Collect general annotation stats
-        feature_types[feature.type]['count'] += 1
-        if feature.attr['biotype'] is not None:
-            feature_types[feature.type]['biotype_count'] += 1
-            feature_types[feature.type]['biotypes'][feature.attr['biotype']] += 1
+        feature_type_counts[feature.type] += 1
+        if biotype_label in feature.attr:
+            feature_type_biotype_counts[feature.type][feature.attr[biotype_label]] += 1
+    
+    if not quiet:
+        print("\n\n{} features with biotype: {}".format(count_feature_type, used_features), file=sys.stderr)
+        print("{} features without biotype: {}".format(count_feature_type, ignored_features), file=sys.stderr)
+        print("{} biotypes to be counted: {}".format(count_feature_type, ', '.join(biotype_counts.keys())), file=sys.stderr)
+        
+        print("\nBiotype stats found for *all* features:", file=sys.stderr)
+        for ft in sorted(feature_type_biotype_counts.keys()):
+            num_ft_bts = len(feature_type_biotype_counts[ft].keys())
+            num_features = 0
+            for c,d in feature_type_biotype_counts[ft].iteritems():
+                num_features += d
+            print("    {:20}\t{:4} biotypes\t{:6} labelled features".format(ft, num_ft_bts, num_features), file=sys.stderr)
+    
+    if(used_features == 0):
+        raise Exception('No features have biotypes!')
     
     # Go through alignments, counting transcript biotypes
+    if not quiet:
+        print("\nReading BAM file (each dot is 1000000 lines): ", end='', file=sys.stderr)
+    i = 0
     for alnmt in bamfile:
+        i += 1
+        if i % 1000000 == 0 and not quiet:
+            print(".", end='', file=sys.stderr)
         if alnmt.aligned:
             iset = None
             for iv2, step_set in selected_features[ alnmt.iv ].steps():
@@ -96,13 +144,18 @@ def count_biotypes (aligned_bam, annotation_file):
                     iset = step_set.copy()
                 else:
                     iset.intersection_update( step_set )
+            else:
+                no_overlap_reads += 1
             if len( iset ) == 1:
                 biotype_counts[ list(iset)[0] ] += 1
     
     # Print the counts
+    if not quiet:
+        print("\n\nType\tRead Count", file=sys.stderr)
+    
     counts_string = ''
-    for biotype in sorted( biotype_counts.keys() ):
-        counts_string += biotype, counts[biotype]
+    for biotype in sorted(biotype_counts.keys()):
+        counts_string += "{}\t{}{}".format(biotype, biotype_counts[biotype], os.linesep)
     
     # Return the counts
     return (counts_string)
@@ -112,11 +165,18 @@ def count_biotypes (aligned_bam, annotation_file):
 
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser("Execute the small RNA pipeline.")
+    parser = argparse.ArgumentParser("Count read overlaps with different biotypes.")
     # TODO should allow multiple reference genomes but then need to determine how annotation files and reference files are linked
     parser.add_argument("-g", "--genome-feature-file", dest="annotation_file",
-                        help="GTF/GFF genome feature file to use for annotation (must match reference file).")
-    parser.add_argument("input_bam_list", nargs="+")
+                        help="GTF/GFF genome feature file to use for annotation (must match reference file)")
+    parser.add_argument("-f", "--genome-feature", dest="feature_type", default='exon',
+                        help="Type of annotation feature to count")
+    parser.add_argument("-c", "--counts-output-file", dest="counts_file",
+                        help="Output filename for biotype counts (will print to STDOUT if not specified)")
+    parser.add_argument("-q", "--quiet", dest="quiet",
+                        help="Suppress status messages sent to STDERR")
+    parser.add_argument("input_bam_list", metavar='<BAM file>', nargs="+",
+                        help="List of input BAM filenames")
 
     kwargs = vars(parser.parse_args())
     

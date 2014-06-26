@@ -60,7 +60,7 @@ def main(genomeref_file, annotation_file, mirbase_file, output_dir, num_cores, f
         # Get top hits with HTSeq-counts on command line
         annotated_bam, htseq_counts_csv = htseq_counts(aligned_bam, run_directory, annotation_file)
         # Make pie chart of biotype alignments
-        (counts, piechart) = htseq_biotypes(annotated_bam, run_directory, annotation_file)
+        (counts, piechart) = htseq_biotypes(aligned_bam, run_directory, annotation_file)
     else:
         print("Error - annotation file not found, cannot calculate feature enrichment. " \
               "Use -g to specify a GTF/GFF file.\nSkipping feature enrichment step..\n\n",
