@@ -20,7 +20,10 @@ import count_biotypes
 from collections import defaultdict
 from matplotlib import pyplot
 
-def main(genomeref_file, annotation_file, mirbase_file, output_dir, num_cores, force_overwrite, keep_tmp, tmp_dir, input_fastq_list):
+quiet = 0
+global quiet
+
+def main(genomeref_file, annotation_file, feature_type, mirbase_file, output_dir, num_cores, force_overwrite, keep_tmp, tmp_dir, quiet, input_fastq_list):
     """
     Add docstring here
     """
@@ -361,7 +364,7 @@ def htseq_biotypes (bam_input, run_directory, annotation_file):
     counts_path = os.path.join(run_directory.output_dir, counts_fn)
     
     # Get the counts
-    counts = count_biotypes.count_biotypes(bam_input, annotation_file)
+    counts = count_biotypes.count_biotypes(bam_input, annotation_file, count_feature_type, quiet)
     
     # Save counts to file
     try:
@@ -625,6 +628,8 @@ if __name__ == "__main__":
                         help="The genome reference file against which to align.")
     parser.add_argument("-g", "--genome-feature-file", dest="annotation_file",
                         help="GTF/GFF genome feature file to use for annotation (must match reference file).")
+    parser.add_argument("-f", "--genome-feature", dest="feature_type", default='exon',
+                        help="Type of annotation feature to count")
     parser.add_argument("-m", "--mirbase-file",
                         help="The miRBase reference file.")
     parser.add_argument("-o", "--output-dir",
@@ -637,7 +642,10 @@ if __name__ == "__main__":
                         help="Force overwrite of existing files.")
     parser.add_argument("-k", "--keep-tmp", action="store_true", default=False,
                         help="Keep temporary files after processing.")
-    parser.add_argument("input_fastq_list", nargs="+")
+    parser.add_argument("-q", "--quiet", dest="quiet",
+                        help="Suppress status messages sent to STDERR")
+    parser.add_argument("input_fastq_list",  metavar='<BAM file>', nargs="+"
+                        help="List of input FastQ filenames (can be gzipped)")
 
     kwargs = vars(parser.parse_args())
     
