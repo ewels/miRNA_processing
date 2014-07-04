@@ -7,6 +7,7 @@ from __future__ import print_function
 
 import argparse
 import datetime
+import HTSeq
 import os
 import re
 import shlex
@@ -20,10 +21,8 @@ import count_biotypes
 from collections import defaultdict
 from matplotlib import pyplot
 
-quiet = 0
-global quiet
 
-def main(genomeref_file, annotation_file, feature_type, mirbase_file, output_dir, num_cores, force_overwrite, keep_tmp, tmp_dir, quiet, input_fastq_list):
+def main(genomeref_file, annotation_file, id_attr, feature_type, mirbase_file, output_dir, num_cores, force_overwrite, keep_tmp, tmp_dir, quiet, input_fastq_list):
     """
     Add docstring here
     """
@@ -61,9 +60,9 @@ def main(genomeref_file, annotation_file, feature_type, mirbase_file, output_dir
     # annotate with htseq-count
     if annotation_file and os.path.isfile(annotation_file):
         # Get top hits with HTSeq-counts on command line
-        annotated_bam, htseq_counts_csv = htseq_counts(aligned_bam, run_directory, annotation_file)
+        annotated_bam, htseq_counts_csv = htseq_counts(aligned_bam, run_directory, annotation_file, id_attr)
         # Make pie chart of biotype alignments
-        (counts, piechart) = htseq_biotypes(aligned_bam, run_directory, annotation_file)
+        (counts, piechart) = htseq_biotypes(aligned_bam, run_directory, annotation_file, feature_type)
     else:
         print("Error - annotation file not found, cannot calculate feature enrichment. " \
               "Use -g to specify a GTF/GFF file.\nSkipping feature enrichment step..\n\n",
@@ -135,15 +134,21 @@ def is_compressed(input_file):
     """
     # TODO add bzip2 support
 
-    # I dare you to come up with a better way to do this
-    cmd = shlex.split("gzip -d -t {}".format(input_file))
+    # Challenge accepted.. (file seems to be much faster than gzip -d -t)
+    cmd = shlex.split("file {}".format(input_file))
     try:
-        file_output = subprocess.check_call(cmd)
-        return True
-    except subprocess.CalledProcessError:
-    # Technically this is too broad a check (file not exists, file not readable)
-    # but that is dealt with elsewhere
-        return False
+        file_output = subprocess.Popen(cmd, stdout=subprocess.PIPE)
+        out, err = file_output.communicate()
+        if 'ASCII text' in out:
+            return False
+        elif 'compressed' in out:
+            return True
+        else:
+            print ("Didn't recognise type of input file: {}".format(out), file=sys.stderr)
+            raise
+    except subprocess.CalledProcessError, e:
+        print ("Couldn't check type of input file: {}".format(e.output), file=sys.stderr)
+        raise
 
 def decompress_file(input_file, output_dir=os.getcwd(), return_pipe=False):
     """
@@ -161,7 +166,8 @@ def decompress_file(input_file, output_dir=os.getcwd(), return_pipe=False):
             # Remove .gz, .gzip, .bz2 extensions if present
             basename = strip_gzip_ext(os.path.basename(input_file))
             output_file = os.path.join(output_dir, basename)
-            cmd = shlex.split("gzip -d {0}".format(input_file))
+            print ("Unzipping {} to {}..".format(input_file, output_file), file=sys.stderr)
+            cmd = shlex.split("gzip -d -c {0}".format(input_file))
             with open(output_file, 'w') as f:
                 subprocess.Popen(cmd, stdout=f)
             return output_file
@@ -283,7 +289,7 @@ def bowtie_align(fq_input, run_directory, genomeref_file, num_cores):
     
     # Write the samtools command to convert the SAM to a BAM
     # We'll write the stdout from this command to a file using Popen
-    samtools_cmd = shlex.split("samtools view -bS -")
+    samtools_cmd = shlex.split("samtools view -bSh -")
     
     # Status message
     timestamp = datetime.date.strftime(datetime.datetime.now(), format="%H:%M:%S %d/%m/%Y")
@@ -304,7 +310,7 @@ def bowtie_align(fq_input, run_directory, genomeref_file, num_cores):
         
         
     
-def htseq_counts(aligned_bam, run_directory, annotation_file):
+def htseq_counts(aligned_bam, run_directory, annotation_file, id_attr='gene_id'):
     """
     Run htseq-count on the command line to create an exon counts file sorted by count
     Returns paths to the annotated BAM file and counts file, as a list
@@ -319,8 +325,8 @@ def htseq_counts(aligned_bam, run_directory, annotation_file):
     
     # Write the commands
     samtools_view_cmd = shlex.split("samtools view -h {}".format(aligned_bam))
-    htseq_cmd = shlex.split("htseq-count -o {} -t exon -s no -q -i 'ID' - {}" \
-                        .format(annotated_bam, annotation_file))
+    htseq_cmd = shlex.split("htseq-count -o {} -t exon -s no -q -i '{}' - {}" \
+                        .format(annotated_bam, annotation_file, id_attr))
     sort_cmd = shlex.split("sort -n -k 2 -r")
     
     # Pipe, baby, pipe
@@ -331,7 +337,7 @@ def htseq_counts(aligned_bam, run_directory, annotation_file):
         p1.stdout.close()
         p3 = subprocess.Popen(sort_cmd, stdin=p2.stdout, stdout=subprocess.PIPE)
         p2.stdout.close()
-        counts_output = sort_p.read()
+        counts_output = p3.stdout.read()
     except subprocess.CalledProcessError:
         return exit(1)
     
@@ -353,7 +359,7 @@ def htseq_counts(aligned_bam, run_directory, annotation_file):
     return (annotated_bam, htseq_counts)
 
 
-def htseq_biotypes (bam_input, run_directory, annotation_file):
+def htseq_biotypes (bam_input, run_directory, annotation_file, feature_type='exon'):
     """
     Use count_biotypes.py to count read overlaps with different biotypes.
     """
@@ -364,7 +370,7 @@ def htseq_biotypes (bam_input, run_directory, annotation_file):
     counts_path = os.path.join(run_directory.output_dir, counts_fn)
     
     # Get the counts
-    counts = count_biotypes.count_biotypes(bam_input, annotation_file, count_feature_type, quiet)
+    counts = count_biotypes.count_biotypes(bam_input, annotation_file, count_feature_type, feature_type, quiet)
     
     # Save counts to file
     try:
@@ -589,7 +595,7 @@ class RunDirectory(object):
         if in_tmp:
             self.tmp_dirs.append(full_dir_path)
         else:
-            self.dirs.append(full_dir_paht)
+            self.dirs.append(full_dir_path)
 
         return full_dir_path
 
@@ -628,8 +634,10 @@ if __name__ == "__main__":
                         help="The genome reference file against which to align.")
     parser.add_argument("-g", "--genome-feature-file", dest="annotation_file",
                         help="GTF/GFF genome feature file to use for annotation (must match reference file).")
-    parser.add_argument("-f", "--genome-feature", dest="feature_type", default='exon',
-                        help="Type of annotation feature to count")
+    parser.add_argument("-i", "--genome-id-attr", dest="id_attr", default='gene_id',
+                        help="Annotation ID to use for HTSeq Counts")
+    parser.add_argument("-y", "--genome-feature", dest="feature_type", default='exon',
+                        help="Type of annotation feature to count with HTSeq")
     parser.add_argument("-m", "--mirbase-file",
                         help="The miRBase reference file.")
     parser.add_argument("-o", "--output-dir",
@@ -642,9 +650,9 @@ if __name__ == "__main__":
                         help="Force overwrite of existing files.")
     parser.add_argument("-k", "--keep-tmp", action="store_true", default=False,
                         help="Keep temporary files after processing.")
-    parser.add_argument("-q", "--quiet", dest="quiet",
+    parser.add_argument("-q", "--quiet", dest="quiet", default='0',
                         help="Suppress status messages sent to STDERR")
-    parser.add_argument("input_fastq_list",  metavar='<BAM file>', nargs="+"
+    parser.add_argument("input_fastq_list",  metavar='<BAM file>', nargs="+",
                         help="List of input FastQ filenames (can be gzipped)")
 
     kwargs = vars(parser.parse_args())
