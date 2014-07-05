@@ -25,12 +25,10 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
-
-def main(annotation_file, input_bam_list, biotype_flag, counts_file, feature_type, num_lines, quiet):
+def main(annotation_file, input_bam_list, biotype_flag, feature_type, num_lines, quiet):
     """
     Count the biotypes
     """
-    
     # Sanity check - make sure input files exist
     if annotation_file:
         if not os.path.isfile(annotation_file):
@@ -41,32 +39,42 @@ def main(annotation_file, input_bam_list, biotype_flag, counts_file, feature_typ
         if not os.path.isfile(fname):
             raise IOError("Fatal error - can't find input file {}".format(fname))
     
+    # Parse the GTF file
+    (selected_features, empty_biotype_counts, empty_biotype_lengths) = parse_gtf_biotypes(annotation_file, biotype_flag, feature_type, quiet)
+    
     # Process files
     for fname in input_bam_list:
         if not quiet:
             print("Processing {}".format(fname), file=sys.stderr)
-        (biotype_counts, biotype_lengths, aligned_reads, counts_string) = count_biotypes(fname, annotation_file, biotype_flag, feature_type, num_lines, quiet)
-        if counts_file:
-            # Save to file
-            try:
-                with open(counts_file, 'w') as fh:
-                    print(counts_string, file=fh);
-            except IOError as e:
-                raise IOError(e)
-        else:
-            # Print to STDOUT
-            print(counts_string, file=sys.stdout)
+        # Set up filenames
+        file_basename = os.path.splitext(os.path.basename(fname))[0]
+        counts_file = "{}_counts.txt".format(file_basename)
+        
+        # Make copies of the biotype dicts
+        biotype_counts = empty_biotype_counts.copy()
+        biotype_lengths = empty_biotype_lengths.copy()
+        
+        # Generate counts
+        (biotype_counts, biotype_lengths, counts_string) = count_biotype_overlaps(fname, selected_features, biotype_counts, biotype_lengths, num_lines, quiet)
+        # Save to file
+        try:
+            with open(counts_file, 'w') as fh:
+                print(counts_string, file=fh);
+        except IOError as e:
+            raise IOError(e)
         
         # Plot graph
         plot_basename = os.path.splitext(os.path.basename(fname))[0]
-        (bargraph_png, bargraph_pdf) = plot_bars(biotype_counts, aligned_reads, plot_basename, quiet)
+        plot_title = "{} Biotype Alignments".format(feature_type.title())
+        (bargraph_png, bargraph_pdf) = plot_bars(biotype_counts, plot_basename, plot_title, True, quiet)
+        (bargraph_png, bargraph_pdf) = plot_bars(biotype_counts, plot_basename, plot_title, False, quiet)
             
     # Done!
     pass
 
 
 
-def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', count_feature_type='exon', number_lines=10000000, quiet=0):
+def parse_gtf_biotypes (annotation_file, biotype_label='gene_type', count_feature_type='exon', quiet=0):
     """
     Custom function that uses HTSeq core to analyse overlaps
     with annotation features of different biotypes.
@@ -74,12 +82,8 @@ def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', cou
     of biotypes with lists of read lengths, the total number
     of aligned reads and a summary string ready for printing
     """
-    # Set up filenames
-    aligned_bam = os.path.realpath(aligned_bam)
+    # Set up filenames & objects
     annotation_file = os.path.realpath(annotation_file)
-    
-    # Create file objects
-    bamfile = HTSeq.BAM_Reader( aligned_bam )
     gtffile = HTSeq.GFF_Reader( annotation_file )
             
     # Go through annotation
@@ -96,7 +100,6 @@ def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', cou
     biotype_counts['multiple_features'] = 0
     biotype_lengths['no_overlap'] = []
     biotype_lengths['multiple_features'] = []
-    aligned_reads = 0
     feature_type_counts = defaultdict(int)
     feature_type_biotype_counts = defaultdict(lambda: defaultdict(int))
     i = 0
@@ -145,10 +148,23 @@ def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', cou
     if(used_features == 0):
         raise Exception('No features have biotypes!')
     
+    return (selected_features, biotype_counts, biotype_lengths)
+
+
+def count_biotype_overlaps (aligned_bam, selected_features, biotype_counts, biotype_lengths, number_lines=10000000, quiet=0):
+    """
+    Go thorough an aligned bam, counting overlaps with biotype features
+    """
+   
+    # Set up filenames & objects
+    aligned_bam = os.path.realpath(aligned_bam)
+    bamfile = HTSeq.BAM_Reader( aligned_bam )
+    
     # Go through alignments, counting transcript biotypes
     if not quiet:
         print("\nReading BAM file (each dot is 1000000 lines, will stop at {}): ".format(number_lines), end='', file=sys.stderr)
     i = 0
+    aligned_reads = 0
     for alnmt in bamfile:
         i += 1
         if i > int(number_lines):
@@ -176,8 +192,8 @@ def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', cou
             biotype_lengths[key].append(alnmt.iv.length)
     
     if not quiet:
-        print ("\n\n{} overlaps found from {} aligned reads ({} reads total)".format(aligned_reads-biotype_counts['no_overlap'], aligned_reads, i), file=sys.stderr)
-        print ("{} reads had multiple feature overlaps".format(biotype_counts['multiple_features']), file=sys.stderr)
+        print ("\n{} overlaps found from {} aligned reads ({} reads total)".format(aligned_reads-biotype_counts['no_overlap'], aligned_reads, i), file=sys.stderr)
+        print ("{} reads had multiple feature overlaps\n".format(biotype_counts['multiple_features']), file=sys.stderr)
     
     
     # Make a string table out of the counts
@@ -188,13 +204,13 @@ def count_biotypes (aligned_bam, annotation_file, biotype_label='gene_type', cou
         counts_string += "{}\t{}{}".format(biotype, biotype_counts[biotype], os.linesep)
     
     # Return the counts
-    return (biotype_counts, biotype_lengths, aligned_reads, counts_string)
+    return (biotype_counts, biotype_lengths, counts_string)
 
 
 
 
 
-def plot_bars (biotype_counts, total_reads, output_basename, quiet=0):
+def plot_bars (biotype_counts, output_basename, title="Annotation Biotype Alignments", logx=True, quiet=0):
     """
     Plots bar graph of alignment biotypes using matplotlib pyplot
     Input: dict of biotype labels and associated counts
@@ -205,46 +221,90 @@ def plot_bars (biotype_counts, total_reads, output_basename, quiet=0):
     
     # SET UP VARIABLES
     bar_width = 0.8
+    total_reads = 0
     plt_labels = []
     plt_values = []
-    plt_percentages = []
     for biotype in sorted(biotype_counts, key=biotype_counts.get):
         if biotype_counts[biotype] == 0:
             continue
+        total_reads += biotype_counts[biotype]
+        if biotype == 'no_overlap':
+            continue
         plt_labels.append(biotype)
         plt_values.append(biotype_counts[biotype])
-        plt_percentages.append((biotype_counts[biotype]/total_reads)*100)
-    ypos = numpy.arange(len(plt_labels))
+        
+    ypos = numpy.arange(1, len(plt_labels)+1)
     
     # SET UP OBJECTS
     fig = plt.figure()
     axes = fig.add_subplot(111)
     
     # PLOT GRAPH
-    plt.bar(1, bar_width, plt_values, ypos, align='center', orientation='horizontal', linewidth=0)
+    barlist = axes.bar(1, bar_width, plt_values, ypos, align='center', orientation='horizontal', linewidth=0) 
+    
+    # Give more room for the labels on the left and top
+    plt.subplots_adjust(left=0.25,top=0.8, bottom=0.15)
+    
+    # MAKE SPECIAL CASES GREY
+    if 'multiple_features' in plt_labels:
+        case_index = plt_labels.index('multiple_features')
+        barlist[case_index].set_color('#999999')
     
     # Y AXIS
     axes.set_yticks(ypos)
     axes.set_yticklabels(plt_labels)
     axes.tick_params(left=False, right=False)
-    axes.set_ylim((1,len(plt_labels)))
+    axes.set_ylim((0,len(plt_labels)+1))
     
     # X AXIS
-    axes.set_xscale('log')
     axes.grid(True, zorder=0, which='both', axis='x', linestyle='-', color='#DEDEDE', linewidth=1)
     axes.set_axisbelow(True)
+    if logx:
+        axes.set_xscale('log')
+    
+    # SECONDARY X AXIS
+    ax2 = axes.twiny()
+    if logx:
+        ax2.set_xscale('log')
+    ax2.set_xlim(axes.get_xlim())
+    ax1_ticks = axes.get_xticks()
+    # I have no idea why I have to get rid of these two elements....
+    ax1_ticks = ax1_ticks[1:-1]
+    ax2.set_xticks(ax1_ticks)
+    ax2.set_xlabel('Percentage of Aligned Reads')
+    
+    # SECONDARY AXIS LABELS
+    def percent_total(counts):
+        y = [(x/total_reads)*100 for x in counts]
+        return ["%.2f%%" % z for z in y]
+    ax2_labels = percent_total(ax2.get_xticks())
+    ax2.set_xticklabels(ax2_labels)    
     
     # LABELS
     axes.set_xlabel('Number of Reads')
     axes.set_ylabel('Biotype')
-    axes.set_title("Annotation Biotype Alignments\n{}".format(output_basename))
+    plt.text(0.5, 1.2, title, horizontalalignment='center',
+                fontsize=16, weight='bold', transform=axes.transAxes)
+    plt.text(0.5, 1.15, output_basename, horizontalalignment='center',
+                fontsize=10, weight='light', transform = axes.transAxes)
     axes.tick_params(axis='both', labelsize=8)
-    # Give more room for the labels on the left and top
-    plt.subplots_adjust(left=0.22)
+    ax2.tick_params(axis='both', labelsize=8)
+    if 'no_overlap' in biotype_counts:
+        no_overlap_string = "{} reads had no feature overlap ({:.1%} of all {} aligned reads)" \
+                            .format(biotype_counts['no_overlap'],
+                            # ensure that these are being treated as floats not ints
+                            (biotype_counts['no_overlap'] + 0.0) / (total_reads + 0.0) \
+                            , total_reads)
+        plt.text(0.5, -0.2, no_overlap_string, horizontalalignment='center',
+                    fontsize=8, transform = axes.transAxes)
     
     # SAVE OUTPUT
-    png_fn = "{}.png".format(output_basename)
-    pdf_fn = "{}.pdf".format(output_basename)
+    if logx:
+        png_fn = "{}_biotypeCounts_log.png".format(output_basename)
+        pdf_fn = "{}_biotypeCounts_log.pdf".format(output_basename)
+    else:
+        png_fn = "{}_biotypeCounts.png".format(output_basename)
+        pdf_fn = "{}_biotypeCounts.pdf".format(output_basename)
     print("Saving to {} and {}".format(png_fn, pdf_fn), file=sys.stderr)
     fig.savefig(png_fn)
     fig.savefig(pdf_fn)
@@ -273,8 +333,6 @@ if __name__ == "__main__":
                         help="Type of annotation feature to count")
     parser.add_argument("-b", "--biotype-flat", dest="biotype_flag", default='gene_type',
                         help="GTF biotype flag (default = gene_type or *biotype*)")
-    parser.add_argument("-c", "--counts-output-file", dest="counts_file",
-                        help="Output filename for biotype counts (will print to STDOUT if not specified)")
     parser.add_argument("-n", "--num-lines", dest="num_lines", default=10000000,
                         help="Number of alignments to query")
     parser.add_argument("-q", "--quiet", dest="quiet",
