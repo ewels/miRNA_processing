@@ -63,11 +63,16 @@ def main(annotation_file, input_bam_list, biotype_flag, feature_type, num_lines,
         except IOError as e:
             raise IOError(e)
         
-        # Plot graph
+        # Plot bar graph
         plot_basename = os.path.splitext(os.path.basename(fname))[0]
         plot_title = "{} Biotype Alignments".format(feature_type.title())
         (bargraph_png, bargraph_pdf) = plot_bars(biotype_counts, plot_basename, plot_title, True, quiet)
-        (bargraph_png, bargraph_pdf) = plot_bars(biotype_counts, plot_basename, plot_title, False, quiet)
+        (log_bargraph_png, log_bargraph_pdf) = plot_bars(biotype_counts, plot_basename, plot_title, False, quiet)
+        
+        # Plot epic histogram
+        plot_title = "{} Read Lengths".format(feature_type.title())
+        (hist_png, hist_pdf) = plot_epic_histogram (biotype_lengths, plot_basename, plot_title, False, quiet)
+        (percent_hist_png, percent_hist_pdf) = plot_epic_histogram (biotype_lengths, plot_basename, plot_title, True, quiet)
             
     # Done!
     pass
@@ -98,8 +103,8 @@ def parse_gtf_biotypes (annotation_file, biotype_label='gene_type', count_featur
     biotype_lengths = {}
     biotype_counts['no_overlap'] = 0
     biotype_counts['multiple_features'] = 0
-    biotype_lengths['no_overlap'] = []
-    biotype_lengths['multiple_features'] = []
+    biotype_lengths['no_overlap'] = defaultdict(int)
+    biotype_lengths['multiple_features'] = defaultdict(int)
     feature_type_counts = defaultdict(int)
     feature_type_biotype_counts = defaultdict(lambda: defaultdict(int))
     i = 0
@@ -123,7 +128,7 @@ def parse_gtf_biotypes (annotation_file, biotype_label='gene_type', count_featur
                 used_features += 1
                 selected_features[ feature.iv ] += feature.attr[biotype_label]
                 biotype_counts[ feature.attr[biotype_label] ] = 0
-                biotype_lengths[ feature.attr[biotype_label] ] = []
+                biotype_lengths[ feature.attr[biotype_label] ] = defaultdict(int)
             else:
                 ignored_features += 1
                 
@@ -188,8 +193,9 @@ def count_biotype_overlaps (aligned_bam, selected_features, biotype_counts, biot
                 key = list(iset)[0]
             elif len(iset) == 0:
                 key = 'no_overlap'
+                    
             biotype_counts[key] += 1
-            biotype_lengths[key].append(alnmt.iv.length)
+            biotype_lengths[key][alnmt.iv.length] += 1
     
     if not quiet:
         print ("\n{} overlaps found from {} aligned reads ({} reads total)".format(aligned_reads-biotype_counts['no_overlap'], aligned_reads, i), file=sys.stderr)
@@ -214,8 +220,9 @@ def plot_bars (biotype_counts, output_basename, title="Annotation Biotype Alignm
     """
     Plots bar graph of alignment biotypes using matplotlib pyplot
     Input: dict of biotype labels and associated counts
-    Input: total number of reads (for percentage axis)
-    Input: output fn
+    Input: file basename
+    Input: Plot title
+    Input: logx (t/f)
     Returns filenames of PNG and PDF graphs
     """
     
@@ -235,12 +242,16 @@ def plot_bars (biotype_counts, output_basename, title="Annotation Biotype Alignm
         
     ypos = numpy.arange(1, len(plt_labels)+1)
     
+    minx = 0
+    if logx:
+        minx = 1
+    
     # SET UP OBJECTS
     fig = plt.figure()
     axes = fig.add_subplot(111)
     
     # PLOT GRAPH
-    barlist = axes.bar(1, bar_width, plt_values, ypos, align='center', orientation='horizontal', linewidth=0) 
+    barlist = axes.bar(minx, bar_width, plt_values, ypos, log=logx, align='center', orientation='horizontal', linewidth=0) 
     
     # Give more room for the labels on the left and top
     plt.subplots_adjust(left=0.25,top=0.8, bottom=0.15)
@@ -313,15 +324,119 @@ def plot_bars (biotype_counts, output_basename, title="Annotation Biotype Alignm
     return(png_fn, pdf_fn)
 
 
-def plot_epic_histogram (biotype_lengths, output_basename, quiet=0):
+def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Biotype Lengths", percentage=False, quiet=0):
     """
     Plot awesome histogram of read lengths, with bars broken up by feature
     biotype overlap
+    Input: dict of biotype labels with dict of lengths and counts
+    Input: file basename
+    Input: output fn
+    Returns filenames of PNG and PDF graphs
     """
-    # http://matplotlib.org/1.2.1/examples/pylab_examples/histogram_demo_extended.html
-    # http://matplotlib.org/examples/pylab_examples/bar_stacked.html
-    # n, bins, patches = P.hist(x, 10, normed=1, histtype='bar', stacked=True)
+     
+    # FIND MAX AND MIN LENGTHS, SET UP READ LENGTHS ARRAY
+    min_length = 9999
+    max_length = 0
+    no_overlap_counts = 0
+    total_reads = 0
+    bp_counts = defaultdict(int)
+    for bt in biotype_lengths:
+        if bt == 'no_overlap':
+            continue
+        for x in biotype_lengths[bt]:
+            total_reads += biotype_lengths['no_overlap'][x]
+            if bt == 'no_overlap':
+                no_overlap_counts += biotype_lengths['no_overlap'][x]
+            else:
+                bp_counts[x] += biotype_lengths[bt][x]
+                if x < min_length:
+                    min_length = x
+                if x > max_length:
+                    max_length = x
     
+    
+    # SET UP PLOT
+    fig = plt.figure()
+    axes = fig.add_subplot(111)
+    plt.subplots_adjust(top=0.8, bottom=0.15, right=0.7)
+    x_ind = range(min_length, max_length)
+    bar_width = 0.8
+    cols = ['#a6cee3','#1f78b4','#b2df8a','#33a02c','#fb9a99','#e31a1c','#fdbf6f',
+            '#ff7f00','#cab2d6','#6a3d9a','#ffff99','#b15928']*10    
+    
+    # PREPARE DATA
+    bars = {}
+    for bt in biotype_lengths:
+        if bt == 'no_overlap':
+            continue
+        values = []
+        bt_count = 0
+        for x in range(min_length, max_length):
+            if x not in bp_counts:
+                bp_counts[x] = 0
+            if x in biotype_lengths[bt]:
+                bt_count += biotype_lengths[bt][x]
+                values.append(biotype_lengths[bt][x])
+            else:
+                values.append(0)
+        if bt_count == 0:
+            continue
+        bars[bt_count] = (bt, values)
+    
+    
+    print("Counts: {}".format(bp_counts), file=sys.stderr)
+    
+    temp1 = [bp_counts[key+min_length] for (key,var) in enumerate(values)]
+    temp2 = [var for (key,var) in enumerate(values)]
+    print("Counts 2: {}".format(temp1), file=sys.stderr)
+    print("Values: {}".format(temp2), file=sys.stderr)
+    
+    # PLOT BARS
+    pt = {}
+    i = 0
+    last_values = [0]*(max_length - min_length)
+    legend_labels = []
+    for (count, bar) in sorted(bars.items(), reverse=True):
+        (bt, values) = bar
+        if(percentage):
+            values = [(var/bp_counts[key+min_length])*100 for (key,var) in enumerate(values)]
+        pt[bt] = axes.bar(x_ind, values, width=bar_width, bottom=last_values, align='center', color=cols[i], linewidth=0)
+        legend_labels.append(bt)
+        last_values = [last_values+values for last_values,values in zip(last_values, values)]
+        i += 1
+    
+    # TIDY UP AXES
+    axes.set_xlim((min_length-1,max_length+1))
+    axes.grid(True, zorder=0, which='both', axis='y', linestyle='-', color='#EDEDED', linewidth=1)
+    axes.set_axisbelow(True)
+    axes.tick_params(which='both', labelsize=8, direction='out', top=False, right=False)
+    
+    # LABELS
+    axes.set_xlabel('Read Length (bp)')
+    axes.set_ylabel('Read Count')
+    plt.text(0.5, 1.2, title, horizontalalignment='center',
+                fontsize=16, weight='bold', transform=axes.transAxes)
+    plt.text(0.5, 1.15, output_basename, horizontalalignment='center',
+                fontsize=10, weight='light', transform = axes.transAxes)
+    if 'no_overlap' in biotype_lengths:
+        no_overlap_string = "{} reads had no feature overlap ({:.1%} of all {} aligned reads)" \
+                            .format(no_overlap_counts, ((no_overlap_counts + 0.0) / (total_reads + 0.0)) \
+                            , total_reads)
+        plt.text(0.5, -0.2, no_overlap_string, horizontalalignment='center',
+                    fontsize=8, transform = axes.transAxes)
+    
+    # LEGEND
+    axes.legend(legend_labels, loc='upper left', bbox_to_anchor = (1.02, 1.02), fontsize=8)
+    
+    # SAVE OUTPUT
+    png_fn = "{}_biotypeLengths.png".format(output_basename)
+    pdf_fn = "{}_biotypeLengths.pdf".format(output_basename)
+    print("Saving to {} and {}".format(png_fn, pdf_fn), file=sys.stderr)
+    fig.savefig(png_fn)
+    fig.savefig(pdf_fn)
+    
+    # Return the filenames
+    return(png_fn, pdf_fn)
 
 
 if __name__ == "__main__":
