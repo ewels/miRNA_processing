@@ -7,7 +7,6 @@ from __future__ import print_function
 
 import argparse
 import datetime
-import HTSeq
 import os
 import re
 import shlex
@@ -17,9 +16,6 @@ import subprocess
 import tempfile
 
 import count_biotypes
-
-from collections import defaultdict
-from matplotlib import pyplot
 
 
 def main(genomeref_file, annotation_file, id_attr, feature_type, mirbase_file, output_dir, num_cores, force_overwrite, keep_tmp, tmp_dir, quiet, input_fastq_list):
@@ -61,15 +57,12 @@ def main(genomeref_file, annotation_file, id_attr, feature_type, mirbase_file, o
     if annotation_file and os.path.isfile(annotation_file):
         # Get top hits with HTSeq-counts on command line
         annotated_bam, htseq_counts_csv = htseq_counts(aligned_bam, run_directory, annotation_file, id_attr)
-        # Make pie chart of biotype alignments
-        (counts, piechart) = htseq_biotypes(aligned_bam, run_directory, annotation_file, feature_type)
+        # visualizations
+        count_biotypes.main(annotation_file, annotation_file, feature_type=feature_type)
     else:
         print("Error - annotation file not found, cannot calculate feature enrichment. " \
               "Use -g to specify a GTF/GFF file.\nSkipping feature enrichment step..\n\n",
                file=sys.stderr)
-    
-    # TODO - offer secondary annotation against miRBase co-ordinates?
-    # http://www.mirbase.org/ftp.shtml
     
     # Align against miRBase
     miRBase_hairpin_aligned, miRBase_mature_aligned = miRBase_align(trimmed_fastq, run_directory, num_cores)
@@ -81,8 +74,6 @@ def main(genomeref_file, annotation_file, id_attr, feature_type, mirbase_file, o
     # Produce counts of miRNA alignments
     hairpin_counts = samtools_count_alignments(hairpin_sorted, run_directory)
     mature_counts = samtools_count_alignments(mature_sorted, run_directory)
-    
-    # visualizations
 
     # remove or save tmp directory
     run_directory.remove_tmp_dir
@@ -631,7 +622,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser("Execute the small RNA pipeline.")
     # TODO should allow multiple reference genomes but then need to determine how annotation files and reference files are linked
     parser.add_argument("-r", "--genome-reference-file", dest="genomeref_file", required=True,
-                        help="The genome reference file against which to align.")
+                        help="The genome reference bowtie base against which to align.")
     parser.add_argument("-g", "--genome-feature-file", dest="annotation_file",
                         help="GTF/GFF genome feature file to use for annotation (must match reference file).")
     parser.add_argument("-i", "--genome-id-attr", dest="id_attr", default='gene_id',

@@ -24,7 +24,7 @@ matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 
 
-def main(annotation_file, input_bam_list, biotype_flag, feature_type, num_lines, quiet):
+def main(annotation_file, input_bam_list, biotype_flag='gene_type', feature_type='exon', num_lines=10000000, quiet=0):
     """
     Count the biotypes
     """
