@@ -6,6 +6,7 @@ small RNA pipeline
 from __future__ import print_function
 
 import argparse
+from collections import defaultdict
 import datetime
 import HTSeq
 import numpy
@@ -16,8 +17,6 @@ import shutil
 import sys
 import subprocess
 import tempfile
-
-from collections import defaultdict
 
 # Import matplot lib but avoid default X environment
 import matplotlib
@@ -48,7 +47,7 @@ def main(annotation_file, input_bam_list, biotype_flag, feature_type, num_lines,
             print("Processing {}".format(fname), file=sys.stderr)
         # Set up filenames
         file_basename = os.path.splitext(os.path.basename(fname))[0]
-        counts_file = "{}_counts.txt".format(file_basename)
+        counts_file = "{}_biotypeCounts.txt".format(file_basename)
         
         # Make copies of the biotype dicts
         biotype_counts = empty_biotype_counts.copy()
@@ -339,21 +338,34 @@ def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Bio
     max_length = 0
     no_overlap_counts = 0
     total_reads = 0
+    feature_reads = 0
     bp_counts = defaultdict(int)
     for bt in biotype_lengths:
-        if bt == 'no_overlap':
-            continue
         for x in biotype_lengths[bt]:
-            total_reads += biotype_lengths['no_overlap'][x]
+            total_reads += biotype_lengths[bt][x]
             if bt == 'no_overlap':
-                no_overlap_counts += biotype_lengths['no_overlap'][x]
+                no_overlap_counts += biotype_lengths[bt][x]
             else:
+                feature_reads += biotype_lengths[bt][x]
                 bp_counts[x] += biotype_lengths[bt][x]
                 if x < min_length:
                     min_length = x
                 if x > max_length:
                     max_length = x
     
+    
+    # CUT OFF EXTREME READ LENGTHS
+    # Trim off top and bottom 1% read lengths
+    cum_count = 0
+    first_percentile = (feature_reads + 0.0)/100.0
+    nninth_percentile  = ((feature_reads + 0.0)/100.0)*99
+    for x in range(min_length, max_length):
+        cum_count += bp_counts[x]
+        if (cum_count + 0.0) < first_percentile:
+            min_length = x
+        if (cum_count + 0.0) > nninth_percentile:
+            if max_length+0.0 > x+0.0:
+                max_length = x        
     
     # SET UP PLOT
     fig = plt.figure()
@@ -367,6 +379,7 @@ def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Bio
     # PREPARE DATA
     bars = {}
     for bt in biotype_lengths:
+        # Skip reads with no overlap
         if bt == 'no_overlap':
             continue
         values = []
@@ -383,14 +396,6 @@ def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Bio
             continue
         bars[bt_count] = (bt, values)
     
-    
-    print("Counts: {}".format(bp_counts), file=sys.stderr)
-    
-    temp1 = [bp_counts[key+min_length] for (key,var) in enumerate(values)]
-    temp2 = [var for (key,var) in enumerate(values)]
-    print("Counts 2: {}".format(temp1), file=sys.stderr)
-    print("Values: {}".format(temp2), file=sys.stderr)
-    
     # PLOT BARS
     pt = {}
     i = 0
@@ -399,21 +404,31 @@ def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Bio
     for (count, bar) in sorted(bars.items(), reverse=True):
         (bt, values) = bar
         if(percentage):
-            values = [(var/bp_counts[key+min_length])*100 for (key,var) in enumerate(values)]
+            for (key,var) in enumerate(values):
+                bp_count = bp_counts[key+min_length]
+                if bp_count == 0:
+                    values[key] = 0
+                else:
+                    values[key] = ((var+0.0)/(bp_counts[key+min_length]+0.0))*100
         pt[bt] = axes.bar(x_ind, values, width=bar_width, bottom=last_values, align='center', color=cols[i], linewidth=0)
         legend_labels.append(bt)
         last_values = [last_values+values for last_values,values in zip(last_values, values)]
         i += 1
     
     # TIDY UP AXES
-    axes.set_xlim((min_length-1,max_length+1))
+    if(percentage):
+        axes.set_ylim((0,100))
+    axes.set_xlim((min_length-1,max_length))
     axes.grid(True, zorder=0, which='both', axis='y', linestyle='-', color='#EDEDED', linewidth=1)
     axes.set_axisbelow(True)
     axes.tick_params(which='both', labelsize=8, direction='out', top=False, right=False)
     
     # LABELS
     axes.set_xlabel('Read Length (bp)')
-    axes.set_ylabel('Read Count')
+    if(percentage):
+        axes.set_ylabel('Percentage of Overlaps')
+    else:
+        axes.set_ylabel('Read Count')
     plt.text(0.5, 1.2, title, horizontalalignment='center',
                 fontsize=16, weight='bold', transform=axes.transAxes)
     plt.text(0.5, 1.15, output_basename, horizontalalignment='center',
@@ -431,6 +446,9 @@ def plot_epic_histogram (biotype_lengths, output_basename, title="Annotation Bio
     # SAVE OUTPUT
     png_fn = "{}_biotypeLengths.png".format(output_basename)
     pdf_fn = "{}_biotypeLengths.pdf".format(output_basename)
+    if(percentage):
+        png_fn = "{}_biotypeLengthPercentages.png".format(output_basename)
+        pdf_fn = "{}_biotypeLengthPercentages.pdf".format(output_basename)
     print("Saving to {} and {}".format(png_fn, pdf_fn), file=sys.stderr)
     fig.savefig(png_fn)
     fig.savefig(pdf_fn)
