@@ -273,7 +273,7 @@ def bowtie_align(fq_input, run_directory, genomeref_file, num_cores):
     # -k 200                Report up to 200 good alignments per read
     # --best                Report hits from best stratum
     # -S                    SAM output
-    # --chunkmbs 2048       Up the max mb RAM from 64mb to 2gigs    
+    # --chunkmbs 2048       Up the max mb RAM from 64mb to 2 gigs    
     b_cmd = shlex.split("bowtie -p {num_cores} -t -n 0 -l 15 -e 99999 -k 200 " \
                         "--best -S --chunkmbs 2048 {genomeref_file} {fq_input}" \
                         .format(**locals()))
